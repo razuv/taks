@@ -342,7 +342,7 @@ function renderComparison() {
   const result = $('#comparison-results');
   if (previewId) items.push(byId.get(previewId));
   if (!items.length) {
-    result.innerHTML = icon('columns');
+    result.innerHTML = `<p class="comparison-empty">${icon('columns')}<span>Перетащите сюда гипотезу или нажмите «Сравнить» в списке.</span></p>`;
     return;
   }
   const metrics = [
