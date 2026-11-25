@@ -38,11 +38,9 @@ SOFTWARE. -->
   <symbol id="i-close" viewBox="0 0 24 24"><path d="m18 6-12 12M6 6l12 12"/></symbol>
   <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
   <symbol id="i-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></symbol>
-  <symbol id="i-flag" viewBox="0 0 24 24"><path d="M4 22V3m0 1c4-3 7 3 11 0v11c-4 3-7-3-11 0"/></symbol>
   <symbol id="i-columns" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M12 4v16"/></symbol>
   <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></symbol>
   <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6.5 6.5 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></symbol>
-  <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20M8 7h8m-8 4h6"/></symbol>
 </svg>
 <header class="topbar">
   <div class="topbar-inner">
@@ -53,10 +51,32 @@ SOFTWARE. -->
 <main class="page">
   <section id="plan-view" aria-labelledby="catalog-title">
     <div class="intro">
-      <div><h1 id="catalog-title" tabindex="-1">Гипотезы <span class="count" id="catalog-count"></span></h1></div>
+      <h1 id="catalog-title" tabindex="-1">Гипотезы</h1>
       <button type="button" class="button button-brand" id="open-idea" aria-expanded="false" aria-controls="idea-form"><svg class="icon" aria-hidden="true"><use href="#i-add"/></svg>Новая гипотеза</button>
     </div>
     <div class="board">
+      <section class="budget" id="resource" aria-labelledby="budget-title">
+        <div class="section-heading"><h2 id="budget-title">Ресурс</h2><span id="remaining">Свободно 3 дня</span></div>
+        <div id="capacity-controls" class="capacity-controls" role="group" aria-label="Ресурс в днях">
+          <div class="capacity-row"><label for="total">Всего дней</label><div class="stepper">
+            <button type="button" data-step="total" data-delta="-1" aria-label="Уменьшить общий ресурс"><svg class="icon" aria-hidden="true"><use href="#i-minus"/></svg></button>
+            <input type="number" id="total" min="0" max="99" step="1" inputmode="numeric">
+            <button type="button" data-step="total" data-delta="1" aria-label="Добавить день к общему ресурсу"><svg class="icon" aria-hidden="true"><use href="#i-add"/></svg></button>
+          </div></div>
+          <div class="capacity-row"><label for="reserved">Внеплановые задачи</label><div class="stepper">
+            <button type="button" data-step="reserved" data-delta="-1" aria-label="Убрать день внеплановой работы"><svg class="icon" aria-hidden="true"><use href="#i-minus"/></svg></button>
+            <input type="number" id="reserved" min="0" max="99" step="1" inputmode="numeric">
+            <button type="button" data-step="reserved" data-delta="1" aria-label="Добавить день внеплановой работы"><svg class="icon" aria-hidden="true"><use href="#i-add"/></svg></button>
+          </div></div>
+        </div>
+        <p id="capacity-detail" class="capacity-detail" hidden></p>
+        <details class="capacity-note"><summary>Комментарий к ресурсу <svg class="icon" aria-hidden="true"><use href="#i-down"/></svg></summary>
+          <label class="sr-only" for="capacity-note">Комментарий к ресурсу</label><textarea id="capacity-note" rows="2" maxlength="160"></textarea>
+        </details>
+        <div class="budget-track" id="budget-track" role="meter" aria-label="Дни разработки в плане" aria-valuemin="0" aria-valuemax="3" aria-valuenow="0"><span></span></div>
+        <div class="budget-foot"><span id="used-days">В плане 0 из 3 дней</span></div>
+        <span id="budget-announcement" class="sr-only" role="status"></span>
+      </section>
       <section class="backlog" id="backlog" aria-labelledby="catalog-title">
         <form id="idea-form" class="new-idea" hidden>
           <h2>Новая гипотеза</h2>
@@ -69,67 +89,46 @@ SOFTWARE. -->
           <p id="idea-error" class="form-error" role="alert" hidden></p>
           <div class="form-actions"><button type="button" class="button button-outline" id="cancel-idea">Отмена</button><button class="button button-brand">Добавить</button></div>
         </form>
-        <section class="comparison" id="compare" aria-labelledby="compare-title">
-          <div class="section-heading"><h2 id="compare-title" tabindex="-1">Сравнение <span id="compare-count" class="count" aria-live="polite"></span></h2>
-            <button class="button compare-clear" type="button" id="clear-compare" hidden>Очистить</button></div>
-          <div id="comparison-results"></div>
-        </section>
         <div class="section-heading catalog-heading">
           <div class="segmented" id="sort" role="group" aria-label="Сортировка гипотез">
             <button type="button" data-sort="requests" aria-pressed="true">Запросы</button>
             <button type="button" data-sort="score" aria-pressed="false">Важность</button>
             <button type="button" data-sort="days" aria-pressed="false">Срок</button>
           </div>
+          <a class="button button-outline compare-jump" href="#compare" id="compare-jump" hidden>Сравнение <span id="compare-jump-count"></span></a>
         </div>
-        <div class="metric-head" aria-hidden="true"><span></span><span>Запросы в месяц</span><span>Дни разработки</span></div>
         <ul class="hypotheses" id="hypotheses"></ul>
       </section>
-      <aside class="plan-card" aria-labelledby="plan-title">
-        <section class="plan-body" id="plan-drop" aria-labelledby="plan-title">
-          <div class="section-heading"><h2 id="plan-title" tabindex="-1">План</h2><span id="remaining">Свободно 3 дня</span><span id="selection-count" hidden></span></div>
-          <p id="drop-preview" class="drop-preview" aria-hidden="true" hidden></p>
-          <div id="selection" class="selection"></div>
-          <details class="budget" aria-labelledby="budget-title">
-            <summary id="budget-title"><span>Ресурс <span id="capacity-label" class="count"></span></span><svg class="icon" aria-hidden="true"><use href="#i-down"/></svg></summary>
-            <div class="budget-inner">
-          <div class="budget-value"><strong id="available-days">3</strong><span id="available-unit">дня<br>на гипотезы</span></div>
-          <div class="budget-track" id="budget-track" role="meter" aria-label="Дни разработки в плане" aria-valuemin="0" aria-valuemax="3" aria-valuenow="0"><span></span></div>
-          <div class="budget-foot"><span id="used-days">В плане 0 дней</span></div>
-          <div id="capacity-controls" class="capacity-controls" role="group" aria-label="Ресурс в днях">
-            <div class="capacity-row"><label for="total">Всего дней</label><div class="stepper">
-              <button type="button" data-step="total" data-delta="-1" aria-label="Уменьшить общий ресурс"><svg class="icon" aria-hidden="true"><use href="#i-minus"/></svg></button>
-              <input type="number" id="total" min="0" max="99" step="1" inputmode="numeric">
-              <button type="button" data-step="total" data-delta="1" aria-label="Добавить день к общему ресурсу"><svg class="icon" aria-hidden="true"><use href="#i-add"/></svg></button>
-            </div></div>
-            <div class="capacity-row"><label for="reserved">Внеплановые задачи</label><div class="stepper">
-              <button type="button" data-step="reserved" data-delta="-1" aria-label="Убрать день внеплановой работы"><svg class="icon" aria-hidden="true"><use href="#i-minus"/></svg></button>
-              <input type="number" id="reserved" min="0" max="99" step="1" inputmode="numeric">
-              <button type="button" data-step="reserved" data-delta="1" aria-label="Добавить день внеплановой работы"><svg class="icon" aria-hidden="true"><use href="#i-add"/></svg></button>
-            </div></div>
-          </div>
-          <p id="capacity-detail" class="capacity-detail" hidden></p>
-          <details class="capacity-note"><summary>Почему изменилось число дней? <svg class="icon" aria-hidden="true"><use href="#i-down"/></svg></summary>
-            <label class="sr-only" for="capacity-note">Почему изменилось число дней?</label><textarea id="capacity-note" rows="1" maxlength="160" placeholder="Например, срочное исправление"></textarea>
-          </details>
-          <span id="budget-announcement" class="sr-only" role="status"></span>
-            </div>
-          </details>
-          <form id="decision-form">
-            <label id="reason-label" for="reason">Почему так решили?</label>
-            <textarea id="reason" rows="2" maxlength="500" required aria-describedby="form-error"></textarea>
-            <p id="form-error" class="form-error" role="alert" hidden></p>
-            <p id="draft-warning" class="form-error" role="status" hidden>Браузер не сохраняет черновик между открытиями.</p>
-            <p id="over-budget" class="over-budget" hidden></p>
-            <button type="submit" class="button button-primary" id="save-decision" aria-describedby="over-budget">Сохранить решение</button>
-          </form>
-        </section>
-        <details class="disclosure journal" id="journal">
-          <summary id="journal-title"><span><svg class="icon" aria-hidden="true"><use href="#i-book"/></svg>Журнал решений <span class="count" id="journal-count"></span></span><svg class="icon" aria-hidden="true"><use href="#i-down"/></svg></summary>
-          <div class="disclosure-body" id="journal-list"></div>
-        </details>
-      </aside>
-      <a href="#plan-title" class="mobile-plan" id="mobile-plan">Открыть план <span id="mobile-days"></span></a>
+      <section class="plan-body" id="plan-drop" aria-labelledby="plan-title">
+        <h2 id="plan-title" tabindex="-1">План</h2>
+        <p id="drop-preview" class="drop-preview" aria-hidden="true" hidden></p>
+        <div id="selection" class="selection"></div>
+        <form id="decision-form">
+          <label id="reason-label" for="reason">Почему так решили?</label>
+          <textarea id="reason" rows="2" maxlength="500" required aria-describedby="form-error"></textarea>
+          <p id="form-error" class="form-error" role="alert" hidden></p>
+          <p id="draft-warning" class="form-error" role="status" hidden>Браузер не сохраняет черновик между открытиями.</p>
+          <p id="over-budget" class="over-budget" hidden></p>
+          <button type="submit" class="button button-primary" id="save-decision" aria-describedby="over-budget">Сохранить решение</button>
+        </form>
+      </section>
     </div>
+    <section class="comparison" id="compare" hidden aria-labelledby="compare-title">
+      <div class="section-heading"><h2 id="compare-title" tabindex="-1">Сравнение <span id="compare-count" class="count" aria-live="polite"></span></h2>
+        <button class="button compare-clear" type="button" id="clear-compare" hidden>Очистить</button></div>
+      <div id="comparison-results"></div>
+    </section>
+    <section class="journal" id="journal" aria-labelledby="journal-title">
+      <div class="section-heading journal-heading">
+        <h2 id="journal-title" tabindex="-1">Журнал решений</h2>
+        <div class="segmented" id="journal-filter" role="group" aria-label="Раздел журнала">
+          <button type="button" id="journal-active" data-journal-filter="active" aria-pressed="true">Решения</button>
+          <button type="button" id="journal-archive" data-journal-filter="archived" aria-pressed="false">Архив</button>
+        </div>
+      </div>
+      <div id="journal-list"></div>
+    </section>
+    <a href="#plan-title" class="mobile-plan" id="mobile-plan">План <span id="mobile-days"></span></a>
   </section>
 </main>
 <div id="priority-menu" class="priority-menu" hidden role="group" aria-label="Важность гипотезы">
@@ -137,6 +136,26 @@ SOFTWARE. -->
   <button type="button" data-level="medium"><i></i>Средняя</button>
   <button type="button" data-level="low"><i></i>Низкая</button>
 </div>
+<dialog id="decision-editor" aria-labelledby="decision-editor-title">
+  <form id="decision-edit-form">
+    <h2 id="decision-editor-title">Редактировать решение</h2>
+    <fieldset class="editor-selection">
+      <legend>Гипотезы в работе</legend>
+      <div id="edit-hypotheses"></div>
+    </fieldset>
+    <div class="new-idea-grid">
+      <div><label for="edit-total">Всего дней</label><input id="edit-total" type="number" min="0" max="99" required inputmode="numeric"></div>
+      <div><label for="edit-reserved">Внеплановые задачи</label><input id="edit-reserved" type="number" min="0" max="99" required inputmode="numeric"></div>
+    </div>
+    <div><label for="edit-note">Комментарий к ресурсу</label><textarea id="edit-note" rows="2" maxlength="160"></textarea></div>
+    <div><label for="edit-reason">Обоснование</label><textarea id="edit-reason" rows="3" maxlength="500" required></textarea></div>
+    <p id="edit-error" class="form-error" role="alert" hidden></p>
+    <div class="form-actions">
+      <button type="button" class="button button-outline" id="cancel-edit">Отмена</button>
+      <button class="button button-brand">Сохранить</button>
+    </div>
+  </form>
+</dialog>
 <div id="notice" role="status" class="notice"></div>
 </body>
 </html>

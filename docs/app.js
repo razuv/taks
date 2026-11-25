@@ -134,13 +134,19 @@ const scoreLabel = id => priorities[scores[id]] ?? '—';
 function loadDecisions() {
   const stored = read(DECISIONS_KEY);
   if (!Array.isArray(stored)) return [];
+  const legacyDates = new Map();
   return stored.flatMap(decision => {
     if (!decision || typeof decision.reason !== 'string'
         || !Number.isFinite(Date.parse(decision.createdAt)) || !validSelection(decision.ids)) return [];
     const capacity = decision.capacity ?? DEFAULT_CAPACITY;
     if (!validCapacity(capacity) || sumDays(decision.ids) > available(capacity)
         || (!decision.ids.length && available(capacity) > 0)) return [];
-    return [{ ...decision, capacity }];
+    const occurrence = legacyDates.get(decision.createdAt) ?? 0;
+    legacyDates.set(decision.createdAt, occurrence + 1);
+    return [{
+      ...decision, capacity,
+      id: decision.id ?? `legacy-${Date.parse(decision.createdAt)}-${occurrence}`,
+    }];
   });
 }
 
@@ -150,6 +156,7 @@ let selected = validSelection(storedDraft?.ids) ? storedDraft.ids : [];
 let compared = validSelection(storedDraft?.compared) ? storedDraft.compared.filter(id => !byId.get(id).parent).slice(0, 3) : [];
 reason.value = typeof storedDraft?.reason === 'string' ? storedDraft.reason : '';
 let decisions = loadDecisions();
+let journalView = 'active';
 let activeTheme = read(THEME_KEY) === 'light' ? 'light' : 'dark';
 
 function persistDraft() {
@@ -183,10 +190,7 @@ function renderBoard(announce = false) {
   const free = limit - used;
   const remaining = $('#remaining');
   const over = $('#over-budget');
-  $('#available-days').textContent = limit;
-  $('#available-unit').innerHTML = `${dayLabel(limit)}<br>на гипотезы`;
-  $('#capacity-label').textContent = `${used} / ${limit} дн.`;
-  $('#used-days').textContent = `В плане ${formatDays(used)}`;
+  $('#used-days').textContent = `В плане ${used} из ${limit} дн.`;
   remaining.dataset.over = free < 0;
   remaining.textContent = free < 0 ? `Сверх бюджета ${formatDays(-free)}`
     : free === 0 ? 'Нет свободных дней' : `Свободно ${formatDays(free)}`;
@@ -231,8 +235,7 @@ function renderBoard(announce = false) {
       <span class="duration">${formatDays(item.days)}</span>
       <button class="icon-button" type="button" data-remove="${id}" aria-label="Отложить: ${html(item.name)}" title="Вернуть в гипотезы">${icon('close')}</button>
     </article>`;
-  }).join('') : `<div class="empty-plan"><strong>${limit ? 'Перетащите гипотезу сюда' : 'Весь ресурс занят'}</strong>
-    <span>${limit ? 'Или добавьте её кнопкой «+».' : 'Зафиксируйте причину переноса.'}</span></div>`;
+  }).join('') : '<p class="empty-plan">План пуст</p>';
 }
 
 function renderRows() {
@@ -243,21 +246,26 @@ function renderRows() {
     days: (a, b) => a.days - b.days || demandOrder(a, b),
   };
   const visible = [...hypotheses].sort(order[sortBy]);
-  $('#catalog-count').textContent = visible.length;
   rows.innerHTML = visible.map(item => {
     const active = selected.includes(item.id);
     const trial = item.trial ? byId.get(item.trial.id) : null;
     const label = `Важность: ${priorities[scores[item.id]] ?? 'не задана'}`;
     return `<li><article class="idea" data-drag="${!active}" draggable="${!active}" data-id="${item.id}">
       <div class="idea-text"><h3>${html(item.name)}</h3>${item.value ? `<p>${html(item.value)}</p>` : ''}</div>
-      <div class="metric"><b>${item.requests ?? '—'}</b><span>запр./мес.</span></div>
-      <div class="metric"><b aria-label="${formatDays(item.days)}">${item.days}</b><span>дни</span></div>
+      <div class="idea-metrics">
+        <div class="metric"><span>Запросы / мес.</span><b aria-label="${item.requests ?? 'Неизвестно'}">${item.requests ?? '—'}</b></div>
+        <div class="metric"><span>Разработка</span><b>${formatDays(item.days)}</b></div>
+      </div>
       <div class="idea-actions">
-        <button class="icon-button priority-trigger" type="button" data-priority="${item.id}" data-level="${scores[item.id] ?? ''}"
-          aria-expanded="false" aria-controls="priority-menu" aria-label="${label}. ${html(item.name)}" title="${label}">${icon('flag')}</button>
-        <button class="icon-button compare-toggle" type="button" data-compare="${item.id}" aria-pressed="${compared.includes(item.id)}"
-          aria-label="Сравнить: ${html(item.name)}" title="Сравнить">${icon('columns')}<span>Сравнить</span></button>
-        ${toggleButton(item)}
+        <div class="priority-control">
+          <button class="button priority-trigger" type="button" data-priority="${item.id}" data-level="${scores[item.id] ?? ''}"
+            aria-expanded="false" aria-controls="priority-menu" aria-label="${label}. ${html(item.name)}"><span>${priorities[scores[item.id]] ?? 'Важность'}</span>${icon('down')}</button>
+        </div>
+        <div class="idea-secondary">
+          <button class="icon-button compare-toggle" type="button" data-compare="${item.id}" aria-pressed="${compared.includes(item.id)}"
+            aria-label="Сравнить: ${html(item.name)}" title="Сравнить">${icon('columns')}<span>Сравнить</span></button>
+          ${toggleButton(item)}
+        </div>
       </div>
     </article>${trial ? `<details class="trial-details"><summary>Короткая проверка ${icon('down')}</summary>${trialCard(trial)}</details>` : ''}</li>`;
   }).join('');
@@ -268,11 +276,14 @@ function renderComparison() {
     button.disabled = compared.length >= 3 && !compared.includes(button.dataset.compare);
   }
   const items = compared.map(id => byId.get(id));
-  $('#compare-count').textContent = items.length ? `${items.length} из 3` : '';
+  $('#compare').hidden = !items.length;
+  $('#compare-jump').hidden = !items.length;
+  $('#compare-jump-count').textContent = items.length;
+  $('#compare-count').textContent = `${items.length} из 3`;
   $('#clear-compare').hidden = !items.length;
   const result = $('#comparison-results');
   if (!items.length) {
-    result.innerHTML = '<p class="comparison-hint">Выберите до трёх гипотез для сравнения.</p>';
+    result.innerHTML = '';
     return;
   }
   const metrics = [
@@ -281,8 +292,7 @@ function renderComparison() {
     ['Разработка', item => formatDays(item.days)],
     ['Ожидаемая польза', item => html(item.value || '—')],
   ];
-  result.innerHTML = `${items.length === 1 ? '<p class="comparison-hint">Выберите ещё одну гипотезу.</p>' : ''}
-    <div class="comparison-scroll" tabindex="0" role="region" aria-label="Метрики выбранных гипотез">
+  result.innerHTML = `<div class="comparison-scroll" data-columns="${items.length}" tabindex="0" role="region" aria-label="Метрики выбранных гипотез">
       <table><thead><tr><th scope="col">Критерий</th>${items.map(item => `<th scope="col">${html(item.name)}</th>`).join('')}</tr></thead>
       <tbody>${metrics.map(([label, render]) => `<tr><th scope="row">${label}</th>${items.map(item => `<td>${render(item)}</td>`).join('')}</tr>`).join('')}
       <tr><td></td>${items.map(item => `<td><button type="button" data-compare-plan="${item.id}" class="button button-outline" aria-pressed="${selected.includes(item.id)}">${selected.includes(item.id) ? 'Убрать из плана' : 'В план'}</button></td>`).join('')}</tr>
@@ -345,24 +355,7 @@ function proposalFor(id) {
   return existing ? selected.map(current => current === existing ? id : current) : [...selected, id];
 }
 
-function showForecast(event) {
-  const button = event.target.closest('[data-toggle]');
-  if (!button) return;
-  const item = byId.get(button.dataset.toggle);
-  const excess = sumDays(proposalFor(item.id)) - available(capacity);
-  const hint = button.parentElement.querySelector('.forecast');
-  if (hint) hint.remove();
-  if (selected.includes(item.id) || excess <= 0) return;
-  const preview = document.createElement('span');
-  preview.className = 'forecast';
-  preview.setAttribute('role', 'status');
-  preview.textContent = `Сверх лимита — ${formatDays(excess)}`;
-  button.after(preview);
-}
-rows.addEventListener('pointerover', showForecast);
-rows.addEventListener('focusin', showForecast);
 function updateSelection(next) {
-  rows.querySelector('.forecast')?.remove?.();
   entering = next.find(id => !selected.includes(id));
   const changed = [...selected.filter(id => !next.includes(id)), ...next.filter(id => !selected.includes(id))];
   selected = next;
@@ -385,32 +378,43 @@ function removeItem(id) {
 }
 
 function openJournal() {
+  journalView = 'active';
   renderJournal();
-  journal.open = true;
   $('#journal-title').focus({ preventScroll: true });
   journal.scrollIntoView({ block: 'nearest' });
 }
 
 function renderJournal() {
   const list = $('#journal-list');
-  $('#journal-count').textContent = decisions.length;
-  if (!decisions.length) {
-    list.replaceChildren();
+  const archived = journalView === 'archived';
+  $('#journal-active').setAttribute('aria-pressed', !archived);
+  $('#journal-archive').setAttribute('aria-pressed', archived);
+  const visible = decisions.filter(decision => Boolean(decision.archived) === archived);
+  if (!visible.length) {
+    list.innerHTML = `<p class="journal-empty">${archived ? 'Архив пуст' : 'Решений пока нет'}</p>`;
     return;
   }
-  list.replaceChildren(...decisions.map((decision, index) => {
+  list.replaceChildren(...visible.map(decision => {
     const card = document.createElement('article');
     card.className = 'entry';
-    card.innerHTML = `<div class="entry-top"><div>
-      <h3>${decision.ids.length ? 'Выбрали в работу' : 'Перенос гипотез'}</h3><p><time></time> · ${sumDays(decision.ids)} из ${available(decision.capacity)} дн.</p>
-      </div><button class="button button-outline" type="button" data-copy="${index}">${icon('copy')}Копировать</button></div>
+    const id = html(decision.id);
+    card.innerHTML = `<div class="entry-top">
+      <h3>${decision.ids.length ? 'Выбрали в работу' : 'Перенос гипотез'}</h3>
+      <p><time></time><span>${sumDays(decision.ids)} из ${available(decision.capacity)} дн.</span></p>
+      </div>
       <p class="entry-capacity"></p>
       ${decision.ids.length ? `<ul>${decision.ids.map(id => {
         const item = byId.get(id);
         return `<li>${html(item.name)} · ${formatDays(item.days)}${item.parent ? `<br><small>Проверка: ${item.parent.name}. Что измерим: ${item.signal}</small>` : ''}</li>`;
       }).join('')}</ul>` : ''}
       <p class="entry-alternatives" hidden></p>
-      <p class="entry-reason"></p>`;
+      <p class="entry-reason"></p>
+      <div class="entry-actions">
+        <button class="button button-outline" type="button" data-journal-action="copy" data-decision="${id}">${icon('copy')}Копировать</button>
+        <button class="button button-outline" type="button" data-journal-action="edit" data-decision="${id}">Редактировать</button>
+        <button class="button button-outline" type="button" data-journal-action="archive" data-decision="${id}">${archived ? 'Восстановить' : 'В архив'}</button>
+        <button class="button button-danger" type="button" data-journal-action="delete" data-decision="${id}">Удалить</button>
+      </div>`;
     const time = card.querySelector('time');
     time.dateTime = decision.createdAt;
     time.textContent = dateFormat.format(new Date(decision.createdAt));
@@ -496,8 +500,8 @@ function patchPriority(id) {
   const level = scores[id] ?? '';
   if (button) {
     button.dataset.level = level;
-    button.title = `Важность: ${priorities[level] ?? 'не задана'}`;
-    button.setAttribute('aria-label', `${button.title}. ${byId.get(id).name}`);
+    button.querySelector('span').textContent = priorities[level] ?? 'Важность';
+    button.setAttribute('aria-label', `Важность: ${priorities[level] ?? 'не задана'}. ${byId.get(id).name}`);
   }
   if (!compared.includes(id)) return;
   const cell = $(`[data-comparison-level="${id}"]`);
@@ -665,10 +669,15 @@ ideaForm.addEventListener('submit', event => {
 });
 
 $('#clear-compare').addEventListener('click', () => {
+  const firstToggle = rows.querySelector(`[data-compare="${compared[0]}"]`);
   for (const id of compared) rows.querySelector(`[data-compare="${id}"]`)?.setAttribute('aria-pressed', 'false');
   compared = [];
   persistDraft();
   renderComparison();
+  firstToggle?.focus();
+});
+$('#compare-jump').addEventListener('click', event => {
+  event.preventDefault();
   $('#compare-title').focus();
 });
 $('#comparison-results').addEventListener('click', event => {
@@ -698,10 +707,13 @@ $('#decision-form').addEventListener('submit', event => {
   }
   const alternatives = compared.filter(id => !selected.some(chosen => family(byId.get(chosen)) === id))
     .map(id => ({ name: byId.get(id).name, score: scores[id] ?? null }));
-  const decision = { ids: [...selected], capacity: { ...capacity }, reason: explanation, alternatives, createdAt: new Date().toISOString() };
+  const decision = {
+    id: crypto.randomUUID?.() ?? `decision-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    ids: [...selected], capacity: { ...capacity }, reason: explanation, alternatives, createdAt: new Date().toISOString(),
+  };
   try {
     const previous = loadDecisions();
-    if (previous.length && previous[0].reason === explanation
+    if (previous.length && !previous[0].archived && previous[0].reason === explanation
         && JSON.stringify(previous[0].ids) === JSON.stringify(selected)
         && JSON.stringify(previous[0].capacity) === JSON.stringify(capacity)
         && JSON.stringify(previous[0].alternatives ?? []) === JSON.stringify(alternatives)) {
@@ -722,10 +734,114 @@ $('#decision-form').addEventListener('submit', event => {
   showNotice('Решение сохранено');
 });
 
-$('#journal-list').addEventListener('click', async event => {
-  const button = event.target.closest('[data-copy]');
+const decisionEditor = $('#decision-editor');
+let editingDecision;
+
+function writeJournal(next) {
+  try { save(DECISIONS_KEY, next); }
+  catch { return false; }
+  decisions = next;
+  renderJournal();
+  return true;
+}
+
+function editDecision(decision) {
+  editingDecision = decision;
+  const options = [...hypotheses, ...trials];
+  $('#edit-hypotheses').innerHTML = options.map(item => {
+    const label = item.parent ? `${item.name} (проверка: ${item.parent.name})` : item.name;
+    return `<label class="editor-option">
+      <input type="checkbox" value="${item.id}"${decision.ids.includes(item.id) ? ' checked' : ''}>
+      <span>${html(label)}</span><span class="duration">${formatDays(item.days)}</span>
+    </label>`;
+  }).join('');
+  $('#edit-total').value = decision.capacity.total;
+  $('#edit-reserved').value = decision.capacity.reserved;
+  $('#edit-note').value = decision.capacity.note;
+  $('#edit-reason').value = decision.reason;
+  $('#edit-error').hidden = true;
+  decisionEditor.showModal();
+}
+
+$('#cancel-edit').addEventListener('click', () => decisionEditor.close());
+decisionEditor.addEventListener('close', () => {
+  editingDecision = undefined;
+});
+
+$('#decision-edit-form').addEventListener('submit', event => {
+  event.preventDefault();
+  if (!editingDecision) return;
+  const checked = [...$('#edit-hypotheses').querySelectorAll('input:checked')].map(input => input.value);
+  const ids = [...editingDecision.ids.filter(id => checked.includes(id)), ...checked.filter(id => !editingDecision.ids.includes(id))];
+  const resource = {
+    total: $('#edit-total').valueAsNumber,
+    reserved: $('#edit-reserved').valueAsNumber,
+    note: $('#edit-note').value.trim(),
+  };
+  const explanation = $('#edit-reason').value.trim();
+  const latest = loadDecisions();
+  const current = latest.find(decision => decision.id === editingDecision.id);
+  const error = $('#edit-error');
+  let issue = '';
+  if (!current) issue = 'Решение уже удалено.';
+  else if (JSON.stringify(current) !== JSON.stringify(editingDecision)) issue = 'Решение изменилось в другой вкладке. Откройте его заново.';
+  else if (!explanation) issue = 'Добавьте обоснование.';
+  else if (!validCapacity(resource)) issue = 'Укажите целое число от 0 до 99 для каждого поля ресурса.';
+  else if (!validSelection(ids)) issue = 'Для каждой гипотезы выберите один вариант: полный или короткую проверку.';
+  else if (sumDays(ids) > available(resource)) issue = `Перерасход — ${formatDays(sumDays(ids) - available(resource))}.`;
+  else if (!ids.length && available(resource) > 0) issue = 'Добавьте гипотезу в решение.';
+  if (!issue) {
+    const chosen = new Set(ids.map(id => byId.get(family(byId.get(id))).name));
+    const alternatives = Array.isArray(current.alternatives)
+      ? current.alternatives.filter(item => !chosen.has(item?.name)) : [];
+    const updated = { ...current, ids, reason: explanation, capacity: resource, alternatives };
+    if (writeJournal(latest.map(decision => decision.id === current.id ? updated : decision))) {
+      decisionEditor.close();
+      $('#journal-title').focus({ preventScroll: true });
+      showNotice('Изменения сохранены');
+      return;
+    }
+    issue = 'Браузер не смог сохранить изменения.';
+  }
+  error.textContent = issue;
+  error.hidden = false;
+});
+
+$('#journal-filter').addEventListener('click', event => {
+  const button = event.target.closest('[data-journal-filter]');
   if (!button) return;
-  const decision = decisions[Number(button.dataset.copy)];
+  journalView = button.dataset.journalFilter;
+  renderJournal();
+});
+
+$('#journal-list').addEventListener('click', async event => {
+  const button = event.target.closest('[data-journal-action]');
+  if (!button) return;
+  const { decision: id, journalAction: action } = button.dataset;
+  const latest = loadDecisions();
+  const decision = latest.find(item => item.id === id);
+  if (!decision) {
+    decisions = latest;
+    renderJournal();
+    showNotice('Решение уже удалено');
+    return;
+  }
+  if (action === 'edit') {
+    editDecision(decision);
+    return;
+  }
+  if (action === 'archive' || action === 'delete') {
+    if (action === 'delete' && !window.confirm('Удалить решение без возможности восстановления?')) return;
+    const next = action === 'delete' ? latest.filter(item => item.id !== id)
+      : latest.map(item => item.id === id ? { ...item, archived: !item.archived } : item);
+    if (!writeJournal(next)) {
+      showNotice('Браузер не смог обновить журнал');
+      return;
+    }
+    $(journalView === 'archived' ? '#journal-archive' : '#journal-active').focus({ preventScroll: true });
+    showNotice(action === 'delete' ? 'Решение удалено' : decision.archived ? 'Решение восстановлено' : 'Решение в архиве');
+    return;
+  }
   const summary = [
     `${decision.ids.length ? 'Выбрали в работу' : 'Перенос гипотез'} · ${sumDays(decision.ids)} из ${available(decision.capacity)} дн.`,
     capacitySummary(decision.capacity),

@@ -35,6 +35,7 @@ function board(storage = new Map()) {
       append() {},
       contains(node) { return node?.parent === this; },
       focus() {}, replaceChildren(...children) { this.children = children; }, setCustomValidity() {},
+      showModal() { this.open = true; }, close() { this.open = false; },
       reset() {}, scrollIntoView() {}, querySelectorAll() { return []; },
       addEventListener(name, handler) { this[name] = handler; },
     };
@@ -49,7 +50,8 @@ function board(storage = new Map()) {
     ...make(), documentElement: make(), body: make(), querySelector: get, querySelectorAll: () => [], createElement: make,
   };
   const localStorage = { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) };
-  vm.runInContext(source, vm.createContext({ crypto, document, localStorage, window: make(), setTimeout() {}, clearTimeout() {} }));
+  const window = { ...make(), confirm: () => true };
+  vm.runInContext(source, vm.createContext({ crypto, document, localStorage, window, setTimeout() {}, clearTimeout() {} }));
   return {
     get, document, storage,
     click: (action, id) => get('#hypotheses').click(event(action, id)),
@@ -88,7 +90,7 @@ test('a drop over budget lands in the draft, with an inline reason saving is blo
   app.get('#capacity-controls').click({
     target: { closest: () => ({ dataset: { step: 'total', delta: '1' } }) },
   });
-  assert.equal(app.get('#available-days').textContent, 4);
+  assert.equal(app.get('#used-days').textContent, 'В плане 4 из 4 дн.');
   assert.equal(app.get('#save-decision').disabled, false);
   assert.match(app.get('#selection').innerHTML, /Готовые шаблоны/);
   app.get('#reason').value = 'Сократить время до первого документа';
@@ -106,21 +108,21 @@ test('a drop over budget lands in the draft, with an inline reason saving is blo
   assert.match(app.get('#remaining').textContent, /Свободно 1 день/);
   assert.equal(app.get('#save-decision').disabled, false);
   assert.equal(app.drop('templates-trial', true), '');
-  assert.match(app.get('#selection').innerHTML, /Перетащите гипотезу/);
+  assert.match(app.get('#selection').innerHTML, /План пуст/);
 });
 
 test('zero capacity allows an explicit deferral with a reason and retains old journal entries', () => {
   const app = board(new Map([[DECISIONS, JSON.stringify([legacy])]]));
   app.click('toggle', 'pdf');
   app.capacity(3, 4, 'Сбой в проде');
-  assert.equal(app.get('#available-days').textContent, 0);
+  assert.equal(app.get('#used-days').textContent, 'В плане 1 из 0 дн.');
   app.save('Подождём до следующей недели');
   assert.equal(JSON.parse(app.storage.get(DECISIONS)).length, 1);
   app.get('#selection').click(event('remove', 'pdf'));
   assert.equal(app.get('#save-decision').textContent, 'Зафиксировать перенос');
   app.save('Подождём до следующей недели');
   app.save('Подождём до следующей недели');
-  assert.equal(app.get('#journal').open, true);
+  assert.equal(app.get('#journal-active')['aria-pressed'], true);
   const records = JSON.parse(app.storage.get(DECISIONS));
   assert.equal(records.length, 2);
   assert.deepEqual(records[0].ids, []);
@@ -139,7 +141,7 @@ test('theme, resource and draft return after reload', () => {
   assert.deepEqual(JSON.parse(app.storage.get(DRAFT)).ids, ['drafts']);
   const reloaded = board(app.storage);
   assert.equal(reloaded.document.documentElement.dataset.theme, 'light');
-  assert.equal(reloaded.get('#available-days').textContent, 4);
+  assert.equal(reloaded.get('#used-days').textContent, 'В плане 3 из 4 дн.');
   assert.equal(reloaded.get('#reason').value, 'Черновик');
   assert.equal(reloaded.get('#save-decision').disabled, false);
 });
@@ -162,7 +164,6 @@ test('add an idea, score it, compare it and record the trade-off', () => {
   app.get('#idea-form').submit({ preventDefault() {} });
   const [created] = JSON.parse(app.storage.get('taks:catalog:v1'));
   assert.equal(created.requests, null);
-  assert.equal(app.get('#catalog-count').textContent, 7);
   assert.match(app.get('#hypotheses').innerHTML, /Экспорт &lt;теста&gt;/);
   assert.doesNotMatch(app.get('#hypotheses').innerHTML, /Экспорт <теста>/);
 
@@ -195,14 +196,55 @@ test('capacity, comparison selection, and the plan update without replacing the 
   const app = board(new Map([['taks:scores:v1', JSON.stringify({ pdf: 4, tips: 2 })]]));
   const rows = app.get('#hypotheses');
   const initialWrites = rows.markupWrites;
+  assert.equal(app.get('#compare').hidden, true);
   assert.match(rows.innerHTML, /data-priority="pdf" data-level="high"/);
   assert.match(rows.innerHTML, /data-priority="tips" data-level="low"/);
   app.capacity(16, 0);
   app.click('compare', 'pdf');
+  assert.equal(app.get('#compare').hidden, false);
+  assert.doesNotMatch(app.get('#comparison-results').innerHTML, /Выберите/);
   app.click('toggle', 'pdf');
   assert.equal(rows.markupWrites, initialWrites);
   assert.equal(app.get('#budget-track').style['--progress'], 1 / 16);
   app.capacity(0, 0);
   assert.equal(app.get('#budget-track').style['--progress'], 1);
   assert.equal(app.get('#budget-track').dataset.over, true);
+});
+
+test('edit, archive, restore and delete a legacy decision without changing the draft', async () => {
+  const storage = new Map([[DECISIONS, JSON.stringify([legacy])]]);
+  const app = board(storage);
+  const id = /data-decision="([^"]+)"/.exec(app.get('#journal-list').children[0].innerHTML)[1];
+  const action = (target, name) => target.get('#journal-list').click({
+    target: { closest: () => ({ dataset: { decision: id, journalAction: name } }) },
+  });
+  const latest = () => JSON.parse(storage.get(DECISIONS));
+  await action(app, 'edit');
+  assert.equal(app.get('#decision-editor').open, true);
+  app.get('#edit-hypotheses').querySelectorAll = () => [{ value: 'pdf' }, { value: 'tips' }];
+  app.get('#edit-total').valueAsNumber = 2;
+  app.get('#edit-reserved').valueAsNumber = 0;
+  app.get('#edit-reason').value = 'Обновили решение';
+  app.get('#decision-edit-form').submit({ preventDefault() {} });
+  assert.match(app.get('#edit-error').textContent, /Перерасход/);
+  assert.equal(latest()[0].reason, legacy.reason);
+  app.get('#edit-total').valueAsNumber = 3;
+  app.get('#decision-edit-form').submit({ preventDefault() {} });
+  assert.equal(latest()[0].reason, 'Обновили решение');
+  assert.deepEqual(latest()[0].ids, ['pdf', 'tips']);
+  assert.equal(latest()[0].createdAt, legacy.createdAt);
+  assert.equal(storage.has(DRAFT), false);
+
+  await action(app, 'archive');
+  assert.equal(latest()[0].archived, true);
+  const reloaded = board(storage);
+  assert.match(reloaded.get('#journal-list').innerHTML, /Решений пока нет/);
+  reloaded.get('#journal-filter').click({
+    target: { closest: () => ({ dataset: { journalFilter: 'archived' } }) },
+  });
+  assert.match(reloaded.get('#journal-list').children[0].innerHTML, /Восстановить/);
+  await action(reloaded, 'archive');
+  assert.equal(latest()[0].archived, false);
+  await action(reloaded, 'delete');
+  assert.deepEqual(latest(), []);
 });
