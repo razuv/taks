@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Такс — пространство для идей, сравнения гипотез и обоснованных решений.">
+<title>Такс — гипотезы и решения</title>
+<link rel="icon" href="taks-mark.png" type="image/png">
+<link rel="stylesheet" href="https://cdn-app.sberdevices.ru/shared-static/0.0.0/styles/SBSansDisplay.0.2.0.css" media="print" onload="this.media='all'">
+<link rel="stylesheet" href="https://cdn-app.sberdevices.ru/shared-static/0.0.0/styles/SBSansText.0.2.0.css" media="print" onload="this.media='all'">
+<link rel="stylesheet" href="styles.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<!-- Lucide icon artwork. Copyright (c) 2026 Lucide Icons and Contributors.
+Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted, provided that the above copyright notice and this permission notice appear in all copies.
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+Icons derived from Feather: Copyright (c) 2013-2022 Cole Bemis.
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE. -->
+<svg hidden xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-add" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></symbol>
+  <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m20 6-11 11-5-5"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="m18 6-12 12M6 6l12 12"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></symbol>
+  <symbol id="i-flag" viewBox="0 0 24 24"><path d="M4 22V3m0 1c4-3 7 3 11 0v11c-4 3-7-3-11 0"/></symbol>
+  <symbol id="i-columns" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M12 4v16"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6.5 6.5 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20M8 7h8m-8 4h6"/></symbol>
+</svg>
+<header class="topbar">
+  <div class="topbar-inner">
+    <span class="wordmark"><img src="taks-mark.png" width="40" height="40" alt="">Такс</span>
+    <button class="icon-button theme-button" type="button" id="theme-toggle" aria-label="Включить светлую тему" title="Включить светлую тему"></button>
+  </div>
+</header>
+<main class="page">
+  <section id="plan-view" aria-labelledby="catalog-title">
+    <div class="intro">
+      <div><h1 id="catalog-title" tabindex="-1">Гипотезы <span class="count" id="catalog-count"></span></h1></div>
+      <button type="button" class="button button-brand" id="open-idea" aria-expanded="false" aria-controls="idea-form"><svg class="icon" aria-hidden="true"><use href="#i-add"/></svg>Новая гипотеза</button>
+    </div>
+    <div class="board">
+      <section class="backlog" id="backlog" aria-labelledby="catalog-title">
+        <form id="idea-form" class="new-idea" hidden>
+          <h2>Новая гипотеза</h2>
+          <label for="idea-name">Название</label><input type="text" id="idea-name" maxlength="90" required>
+          <label for="idea-value">Ожидаемая польза</label><textarea id="idea-value" maxlength="220" rows="2" placeholder="Что изменится для пользователя?"></textarea>
+          <div class="new-idea-grid">
+            <div><label for="idea-requests">Запросы за месяц</label><input type="number" id="idea-requests" min="0" max="999999" step="1" placeholder="Неизвестно"></div>
+            <div><label for="idea-days">Разработка, дни</label><input type="number" id="idea-days" min="1" max="99" step="1" required></div>
+          </div>
+          <p id="idea-error" class="form-error" role="alert" hidden></p>
+          <div class="form-actions"><button type="button" class="button button-outline" id="cancel-idea">Отмена</button><button class="button button-brand">Добавить</button></div>
+        </form>
+        <section class="comparison" id="compare" aria-labelledby="compare-title">
+          <div class="section-heading"><h2 id="compare-title" tabindex="-1">Сравнение <span id="compare-count" class="count" aria-live="polite"></span></h2>
+            <button class="button compare-clear" type="button" id="clear-compare" hidden>Очистить</button></div>
+          <div id="comparison-results"></div>
+        </section>
+        <div class="section-heading catalog-heading">
+          <div class="segmented" id="sort" role="group" aria-label="Сортировка гипотез">
+            <button type="button" data-sort="requests" aria-pressed="true">Запросы</button>
+            <button type="button" data-sort="score" aria-pressed="false">Важность</button>
+            <button type="button" data-sort="days" aria-pressed="false">Срок</button>
+          </div>
+        </div>
+        <div class="metric-head" aria-hidden="true"><span></span><span>Запросы в месяц</span><span>Дни разработки</span></div>
+        <ul class="hypotheses" id="hypotheses"></ul>
+      </section>
+      <aside class="plan-card" aria-labelledby="plan-title">
+        <section class="plan-body" id="plan-drop" aria-labelledby="plan-title">
+          <div class="section-heading"><h2 id="plan-title" tabindex="-1">План</h2><span id="remaining">Свободно 3 дня</span><span id="selection-count" hidden></span></div>
+          <p id="drop-preview" class="drop-preview" aria-hidden="true" hidden></p>
+          <div id="selection" class="selection"></div>
+          <details class="budget" aria-labelledby="budget-title">
+            <summary id="budget-title"><span>Ресурс <span id="capacity-label" class="count"></span></span><svg class="icon" aria-hidden="true"><use href="#i-down"/></svg></summary>
+            <div class="budget-inner">
+          <div class="budget-value"><strong id="available-days">3</strong><span id="available-unit">дня<br>на гипотезы</span></div>
+          <div class="budget-track" id="budget-track" role="meter" aria-label="Дни разработки в плане" aria-valuemin="0" aria-valuemax="3" aria-valuenow="0"><span></span></div>
+          <div class="budget-foot"><span id="used-days">В плане 0 дней</span></div>
+          <div id="capacity-controls" class="capacity-controls" role="group" aria-label="Ресурс в днях">
+            <div class="capacity-row"><label for="total">Всего дней</label><div class="stepper">
+              <button type="button" data-step="total" data-delta="-1" aria-label="Уменьшить общий ресурс"><svg class="icon" aria-hidden="true"><use href="#i-minus"/></svg></button>
+              <input type="number" id="total" min="0" max="99" step="1" inputmode="numeric">
+              <button type="button" data-step="total" data-delta="1" aria-label="Добавить день к общему ресурсу"><svg class="icon" aria-hidden="true"><use href="#i-add"/></svg></button>
+            </div></div>
+            <div class="capacity-row"><label for="reserved">Внеплановые задачи</label><div class="stepper">
+              <button type="button" data-step="reserved" data-delta="-1" aria-label="Убрать день внеплановой работы"><svg class="icon" aria-hidden="true"><use href="#i-minus"/></svg></button>
+              <input type="number" id="reserved" min="0" max="99" step="1" inputmode="numeric">
+              <button type="button" data-step="reserved" data-delta="1" aria-label="Добавить день внеплановой работы"><svg class="icon" aria-hidden="true"><use href="#i-add"/></svg></button>
+            </div></div>
+          </div>
+          <p id="capacity-detail" class="capacity-detail" hidden></p>
+          <details class="capacity-note"><summary>Почему изменилось число дней? <svg class="icon" aria-hidden="true"><use href="#i-down"/></svg></summary>
+            <label class="sr-only" for="capacity-note">Почему изменилось число дней?</label><textarea id="capacity-note" rows="1" maxlength="160" placeholder="Например, срочное исправление"></textarea>
+          </details>
+          <span id="budget-announcement" class="sr-only" role="status"></span>
+            </div>
+          </details>
+          <form id="decision-form">
+            <label id="reason-label" for="reason">Почему так решили?</label>
+            <textarea id="reason" rows="2" maxlength="500" required aria-describedby="form-error"></textarea>
+            <p id="form-error" class="form-error" role="alert" hidden></p>
+            <p id="draft-warning" class="form-error" role="status" hidden>Браузер не сохраняет черновик между открытиями.</p>
+            <p id="over-budget" class="over-budget" hidden></p>
+            <button type="submit" class="button button-primary" id="save-decision" aria-describedby="over-budget">Сохранить решение</button>
+          </form>
+        </section>
+        <details class="disclosure journal" id="journal">
+          <summary id="journal-title"><span><svg class="icon" aria-hidden="true"><use href="#i-book"/></svg>Журнал решений <span class="count" id="journal-count"></span></span><svg class="icon" aria-hidden="true"><use href="#i-down"/></svg></summary>
+          <div class="disclosure-body" id="journal-list"></div>
+        </details>
+      </aside>
+      <a href="#plan-title" class="mobile-plan" id="mobile-plan">Открыть план <span id="mobile-days"></span></a>
+    </div>
+  </section>
+</main>
+<div id="priority-menu" class="priority-menu" hidden role="group" aria-label="Важность гипотезы">
+  <button type="button" data-level="high"><i></i>Высокая</button>
+  <button type="button" data-level="medium"><i></i>Средняя</button>
+  <button type="button" data-level="low"><i></i>Низкая</button>
+</div>
+<div id="notice" role="status" class="notice"></div>
+</body>
+</html>
