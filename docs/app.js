@@ -70,8 +70,39 @@ const isCustomIdea = item => !!item && /^idea-[a-f0-9-]+$/.test(item.id)
   && isDayCount(item.days) && item.days > 0
   && (item.requests === null || (Number.isInteger(item.requests) && item.requests >= 0 && item.requests <= 999999));
 
+let editing = null;
+let previousDraft;
+function showPane(pane) {
+  document.body.dataset.pane = pane;
+  for (const button of document.querySelectorAll('.mobile-nav button')) {
+    button.setAttribute('aria-pressed', button.dataset.pane === pane);
+  }
+  if (pane === 'journal') journal.open = true;
+}
+$('.mobile-nav').addEventListener('click', event => {
+  const button = event.target.closest('button');
+  if (button) {
+    showPane(button.dataset.pane);
+    window.scrollTo(0, 0);
+  }
+});
 let priorityTrigger;
 let sortBy = 'requests';
+let catalogReverse = false;
+const criteria = {
+  requests: { label: 'Запросы', value: item => item.requests, direction: -1 },
+  score: { label: 'Важность', value: item => priorityRank[scores[item.id]], direction: -1 },
+  days: { label: 'Срок', value: item => item.days, direction: 1 },
+};
+function compareMetric(a, b, key, reverse) {
+  const criterion = criteria[key];
+  const x = criterion.value(a), y = criterion.value(b);
+  if (x == null || y == null) return Number(x == null) - Number(y == null);
+  return (x - y) * criterion.direction * (reverse ? -1 : 1);
+}
+function directionIcon(key, reverse) {
+  return icon(criteria[key].direction * (reverse ? -1 : 1) > 0 ? 'ascending' : 'descending');
+}
 let entering;
 let selectionKey;
 let drag;
@@ -108,13 +139,15 @@ function mergeCustomIdeas(items) {
     if (byId.has(item.id)) continue;
     hypotheses.push(item);
     byId.set(item.id, item);
+    if (item.trial) byId.set(item.trial.id, { ...item.trial, parent: item });
   }
 }
 
 function customIdeas() {
   const stored = read(CATALOG_KEY);
   return Array.isArray(stored) ? stored.filter(isCustomIdea)
-    .map(({ id, name, value, requests, days }) => ({ id, name, value, requests, days })) : [];
+    .map(({ id, name, value, requests, days, trial }) => ({ id, name, value, requests, days,
+      trial: trial && trial.id === id + "-trial" && isDayCount(trial.days) && trial.days > 0 && trial.days < days && days >= 3 && [trial.name, trial.scope, trial.signal].every(v => typeof v === "string") ? trial : undefined })) : [];
 }
 
 function storedScores() {
@@ -134,19 +167,13 @@ const scoreLabel = id => priorities[scores[id]] ?? '—';
 function loadDecisions() {
   const stored = read(DECISIONS_KEY);
   if (!Array.isArray(stored)) return [];
-  const legacyDates = new Map();
   return stored.flatMap(decision => {
     if (!decision || typeof decision.reason !== 'string'
         || !Number.isFinite(Date.parse(decision.createdAt)) || !validSelection(decision.ids)) return [];
     const capacity = decision.capacity ?? DEFAULT_CAPACITY;
     if (!validCapacity(capacity) || sumDays(decision.ids) > available(capacity)
         || (!decision.ids.length && available(capacity) > 0)) return [];
-    const occurrence = legacyDates.get(decision.createdAt) ?? 0;
-    legacyDates.set(decision.createdAt, occurrence + 1);
-    return [{
-      ...decision, capacity,
-      id: decision.id ?? `legacy-${Date.parse(decision.createdAt)}-${occurrence}`,
-    }];
+    return [{ ...decision, capacity }];
   });
 }
 
@@ -156,10 +183,10 @@ let selected = validSelection(storedDraft?.ids) ? storedDraft.ids : [];
 let compared = validSelection(storedDraft?.compared) ? storedDraft.compared.filter(id => !byId.get(id).parent).slice(0, 3) : [];
 reason.value = typeof storedDraft?.reason === 'string' ? storedDraft.reason : '';
 let decisions = loadDecisions();
-let journalView = 'active';
 let activeTheme = read(THEME_KEY) === 'light' ? 'light' : 'dark';
 
 function persistDraft() {
+  if (editing) return;
   try {
     save(DRAFT_KEY, { capacity, ids: selected, compared, reason: reason.value });
     $('#draft-warning').hidden = true;
@@ -180,8 +207,8 @@ function setTheme() {
   const button = $('#theme-toggle');
   document.documentElement.dataset.theme = activeTheme;
   button.innerHTML = icon(light ? 'moon' : 'sun');
-  button.title = light ? 'Включить тёмную тему' : 'Включить светлую тему';
-  button.setAttribute('aria-label', button.title);
+  button.dataset.tip = light ? 'Включить тёмную тему' : 'Включить светлую тему';
+  button.setAttribute('aria-label', button.dataset.tip);
 }
 
 function renderBoard(announce = false) {
@@ -190,7 +217,9 @@ function renderBoard(announce = false) {
   const free = limit - used;
   const remaining = $('#remaining');
   const over = $('#over-budget');
-  $('#used-days').textContent = `В плане ${used} из ${limit} дн.`;
+  $('#available-days').textContent = limit;
+  $('#available-unit').textContent = `${dayLabel(limit)} на гипотезы`;
+  $('#used-days').textContent = `В плане ${formatDays(used)}`;
   remaining.dataset.over = free < 0;
   remaining.textContent = free < 0 ? `Сверх бюджета ${formatDays(-free)}`
     : free === 0 ? 'Нет свободных дней' : `Свободно ${formatDays(free)}`;
@@ -222,7 +251,7 @@ function renderBoard(announce = false) {
 
   $('#save-decision').disabled = free < 0 || (!selected.length && limit > 0);
   planDrop.dataset.over = free < 0;
-  $('#save-decision').textContent = limit === 0 && !selected.length ? 'Зафиксировать перенос' : 'Сохранить решение';
+  $('#save-decision').textContent = editing ? 'Сохранить изменения' : limit === 0 && !selected.length ? 'Зафиксировать перенос' : 'Сохранить решение';
   const nextSelectionKey = `${selected.join(',')};${free < 0};${limit === 0}`;
   if (selectionKey === nextSelectionKey) return;
   selectionKey = nextSelectionKey;
@@ -231,43 +260,74 @@ function renderBoard(announce = false) {
     const shrink = free < 0 && item.trial
       ? `<button type="button" class="button shrink-button" data-shrink="${item.trial.id}">Заменить на проверку · ${item.days} → ${formatDays(item.trial.days)}</button>` : '';
     return `<article class="assignment" draggable="true" data-drag="true" data-id="${id}"${id === entering ? ' data-enter' : ''}>
-      <div><h3>${html(item.name)}</h3>${item.parent ? '<p>Короткая проверка</p>' : ''}${shrink}</div>
+      <div><h3>${html(item.name)}</h3>${item.parent ? '<p>Короткая проверка</p>' : ''}</div>
       <span class="duration">${formatDays(item.days)}</span>
-      <button class="icon-button" type="button" data-remove="${id}" aria-label="Отложить: ${html(item.name)}" title="Вернуть в гипотезы">${icon('close')}</button>
+      <button class="icon-button" type="button" data-remove="${id}" aria-label="Отложить: ${html(item.name)}" data-tip="Вернуть в гипотезы">${icon('close')}</button>
+      ${shrink}
     </article>`;
   }).join('') : '<p class="empty-plan">План пуст</p>';
 }
 
+const ARCHIVE_KEY = 'taks:archived-ideas:v1';
+const DELETED_KEY = 'taks:deleted-ideas:v1';
+function storedIds(key) {
+  const ids = read(key);
+  return new Set(Array.isArray(ids) ? ids : []);
+}
+function setArchived(id, archived) {
+  const ids = storedIds(ARCHIVE_KEY);
+  if (archived) ids.add(id);
+  else ids.delete(id);
+  try { save(ARCHIVE_KEY, [...ids]); }
+  catch { showNotice('Не удалось сохранить изменения архива'); return; }
+  renderRows();
+  renderComparison();
+  showNotice(archived ? 'Гипотеза в архиве' : 'Гипотеза возвращена в список');
+}
+$('#archived-ideas').addEventListener('click', event => {
+  const button = event.target.closest('[data-restore]');
+  if (button) return setArchived(button.dataset.restore, false);
+  const remove = event.target.closest('[data-delete-idea]');
+  if (!remove) return;
+  const id = remove.dataset.deleteIdea;
+  if (!storedIds(ARCHIVE_KEY).has(id) || !window.confirm(`Удалить «${byId.get(id).name}» из каталога без возможности возврата?`)) return;
+  const deleted = storedIds(DELETED_KEY);
+  deleted.add(id);
+  try { save(DELETED_KEY, [...deleted]); }
+  catch { showNotice('Не удалось удалить гипотезу'); return; }
+  renderRows();
+  renderComparison();
+  showNotice('Гипотеза удалена из каталога');
+});
+
 function renderRows() {
   closePriority(false);
-  const order = {
-    requests: demandOrder,
-    score: (a, b) => (priorityRank[scores[b.id]] ?? 0) - (priorityRank[scores[a.id]] ?? 0) || demandOrder(a, b),
-    days: (a, b) => a.days - b.days || demandOrder(a, b),
-  };
-  const visible = [...hypotheses].sort(order[sortBy]);
+  const ids = storedIds(ARCHIVE_KEY);
+  const deleted = storedIds(DELETED_KEY);
+  const catalog = hypotheses.filter(item => !deleted.has(item.id));
+  const archived = catalog.filter(item => ids.has(item.id));
+  $('#idea-archive').hidden = !archived.length;
+  $('#archive-count').textContent = archived.length;
+  $('#archived-ideas').innerHTML = archived.map(item => `<div class="archive-row"><span>${html(item.name)}</span><div class="archive-actions">
+    <button type="button" class="button" data-restore="${item.id}">${icon('restore')}Вернуть</button>
+    <button type="button" class="button" data-delete-idea="${item.id}">${icon('trash')}Удалить</button></div></div>`).join('');
+  const visible = catalog.filter(item => !ids.has(item.id)).sort((a, b) => compareMetric(a, b, sortBy, catalogReverse) || demandOrder(a, b));
   rows.innerHTML = visible.map(item => {
-    const active = selected.includes(item.id);
     const trial = item.trial ? byId.get(item.trial.id) : null;
     const label = `Важность: ${priorities[scores[item.id]] ?? 'не задана'}`;
-    return `<li><article class="idea" data-drag="${!active}" draggable="${!active}" data-id="${item.id}">
+    return `<li><article class="idea" data-drag="true" draggable="true" data-id="${item.id}">
       <div class="idea-text"><h3>${html(item.name)}</h3>${item.value ? `<p>${html(item.value)}</p>` : ''}</div>
-      <div class="idea-metrics">
-        <div class="metric"><span>Запросы / мес.</span><b aria-label="${item.requests ?? 'Неизвестно'}">${item.requests ?? '—'}</b></div>
-        <div class="metric"><span>Разработка</span><b>${formatDays(item.days)}</b></div>
-      </div>
+      <div class="metric"><b>${item.requests ?? '—'}</b><span>запр./мес.</span></div>
+      <div class="metric"><b aria-label="${formatDays(item.days)}">${item.days}</b><span>дни</span></div>
       <div class="idea-actions">
-        <div class="priority-control">
-          <button class="button priority-trigger" type="button" data-priority="${item.id}" data-level="${scores[item.id] ?? ''}"
-            aria-expanded="false" aria-controls="priority-menu" aria-label="${label}. ${html(item.name)}"><span>${priorities[scores[item.id]] ?? 'Важность'}</span>${icon('down')}</button>
-        </div>
-        <div class="idea-secondary">
-          <button class="icon-button compare-toggle" type="button" data-compare="${item.id}" aria-pressed="${compared.includes(item.id)}"
-            aria-label="Сравнить: ${html(item.name)}" title="Сравнить">${icon('columns')}<span>Сравнить</span></button>
-          ${toggleButton(item)}
-        </div>
+        <button class="icon-button priority-trigger" type="button" data-priority="${item.id}" data-level="${scores[item.id] ?? ''}"
+          aria-expanded="false" aria-controls="priority-menu" aria-label="${label}. ${html(item.name)}" data-tip="${label}">${icon('flag')}</button>
+        <button class="icon-button compare-toggle" type="button" data-compare="${item.id}" aria-pressed="${compared.includes(item.id)}"
+          aria-label="Сравнить: ${html(item.name)}" data-tip="Сравнить">${icon('columns')}<span>Сравнить</span></button>
+        ${toggleButton(item)}
+        <button class="icon-button" type="button" data-archive="${item.id}" aria-label="Архивировать: ${html(item.name)}" data-tip="Архивировать">${icon('archive')}</button>
       </div>
-    </article>${trial ? `<details class="trial-details"><summary>Короткая проверка ${icon('down')}</summary>${trialCard(trial)}</details>` : ''}</li>`;
+    </article>${trial ? `<details class="disclosure trial-details"><summary>Короткая проверка ${icon('down')}</summary><div class="disclosure-content">${trialCard(trial)}</div></details>` : ''}</li>`;
   }).join('');
 }
 
@@ -275,27 +335,26 @@ function renderComparison() {
   for (const button of rows.querySelectorAll('[data-compare]')) {
     button.disabled = compared.length >= 3 && !compared.includes(button.dataset.compare);
   }
+  const previewId = drag?.allowed.has('compare') && !compared.includes(drag.id) && compared.length < 3 ? drag.id : null;
   const items = compared.map(id => byId.get(id));
-  $('#compare').hidden = !items.length;
-  $('#compare-jump').hidden = !items.length;
-  $('#compare-jump-count').textContent = items.length;
-  $('#compare-count').textContent = `${items.length} из 3`;
+  $('#compare-count').textContent = items.length ? `${items.length} из 3` : '';
   $('#clear-compare').hidden = !items.length;
   const result = $('#comparison-results');
+  if (previewId) items.push(byId.get(previewId));
   if (!items.length) {
-    result.innerHTML = '';
+    result.innerHTML = icon('columns');
     return;
   }
   const metrics = [
-    ['Важность', item => `<span data-comparison-level="${item.id}" data-level="${scores[item.id] ?? ''}">${scoreLabel(item.id)}</span>`],
-    ['Запросы / мес.', item => item.requests ?? '—'],
-    ['Разработка', item => formatDays(item.days)],
+    ['score', item => `<span data-comparison-level="${item.id}" data-level="${scores[item.id] ?? ''}">${scoreLabel(item.id)}</span>`],
+    ['requests', item => item.requests ?? '—'],
+    ['days', item => formatDays(item.days)],
     ['Ожидаемая польза', item => html(item.value || '—')],
   ];
-  result.innerHTML = `<div class="comparison-scroll" data-columns="${items.length}" tabindex="0" role="region" aria-label="Метрики выбранных гипотез">
-      <table><thead><tr><th scope="col">Критерий</th>${items.map(item => `<th scope="col">${html(item.name)}</th>`).join('')}</tr></thead>
-      <tbody>${metrics.map(([label, render]) => `<tr><th scope="row">${label}</th>${items.map(item => `<td>${render(item)}</td>`).join('')}</tr>`).join('')}
-      <tr><td></td>${items.map(item => `<td><button type="button" data-compare-plan="${item.id}" class="button button-outline" aria-pressed="${selected.includes(item.id)}">${selected.includes(item.id) ? 'Убрать из плана' : 'В план'}</button></td>`).join('')}</tr>
+  result.innerHTML = `<div class="comparison-scroll"${previewId ? ' data-preview' : ''} data-column-count="${items.length}" tabindex="0" role="region" aria-label="Метрики выбранных гипотез">
+      <table><thead><tr><th scope="col">Критерий</th>${items.map(item => `<th scope="col" draggable="true" data-drag="true" data-id="${item.id}">${html(item.name)}</th>`).join('')}</tr></thead>
+      <tbody>${metrics.map(([label, render]) => `<tr><th scope="row">${criteria[label]?.label ?? label}</th>${items.map(item => `<td>${render(item)}</td>`).join('')}</tr>`).join('')}
+      <tr><td></td>${items.map(item => item.id === previewId ? '<td></td>' : `<td><button type="button" data-compare-plan="${item.id}" class="button button-outline" aria-pressed="${selected.includes(item.id)}">${selected.includes(item.id) ? 'Убрать из плана' : 'В план'}</button></td>`).join('')}</tr>
       </tbody></table>
     </div>`;
 }
@@ -311,8 +370,8 @@ function toggleState(item) {
 
 function toggleButton(item) {
   const { active, action, content } = toggleState(item);
-  return `<button class="${item.parent ? 'button button-outline' : 'icon-button'}" type="button"
-    data-toggle="${item.id}" aria-pressed="${active}" aria-label="${action}: ${html(item.name)}" title="${action}">${content}</button>`;
+  return `<button class="${item.parent ? 'button' : 'icon-button'}" type="button"
+    data-toggle="${item.id}" aria-pressed="${active}" aria-label="${action}: ${html(item.name)}" data-tip="${action}">${content}</button>`;
 }
 
 function patchSelection(id) {
@@ -322,13 +381,9 @@ function patchSelection(id) {
     const { active, action, content } = toggleState(item);
     button.setAttribute('aria-pressed', active);
     button.setAttribute('aria-label', `${action}: ${item.name}`);
-    button.title = action;
+    button.dataset.tip = action;
     button.innerHTML = content;
-    const card = button.closest('[data-drag]');
-    if (card) {
-      card.draggable = !active;
-      card.dataset.drag = String(!active);
-    }
+
   }
   if (!compared.includes(id)) return;
   const compareAction = $(`[data-compare-plan="${id}"]`);
@@ -339,13 +394,12 @@ function patchSelection(id) {
 }
 
 function trialCard(item) {
-  const active = selected.includes(item.id);
-  return `<article class="trial" draggable="${!active}" data-drag="${!active}" data-id="${item.id}">
-    <div><h3>${html(item.name)}</h3><p>${item.scope}</p>
-      <p class="trial-metrics">Оценка · ${formatDays(item.days)} · ≈${item.reach} из ${item.parent.requests} запросов</p>
-      <p>${item.assumption}</p></div>
+  return `<article class="trial" draggable="true" data-drag="true" data-id="${item.id}">
+    <div><h3>${html(item.name)}</h3><p>${html(item.scope)}</p>
+      <p class="trial-metrics">Оценка · ${formatDays(item.days)}${item.reach == null ? '' : ` · ≈${item.reach} из ${item.parent.requests} запросов`}</p>
+      ${item.assumption ? `<p>${html(item.assumption)}</p>` : ''}</div>
     ${toggleButton(item)}
-    <p class="trial-signal"><strong>Что измерим</strong> · ${item.signal}</p>
+    ${item.signal ? `<p class="trial-signal"><strong>Что измерим</strong> · ${html(item.signal)}</p>` : ''}
   </article>`;
 }
 
@@ -378,42 +432,34 @@ function removeItem(id) {
 }
 
 function openJournal() {
-  journalView = 'active';
+  showPane('journal');
   renderJournal();
+  journal.open = true;
   $('#journal-title').focus({ preventScroll: true });
   journal.scrollIntoView({ block: 'nearest' });
 }
 
 function renderJournal() {
   const list = $('#journal-list');
-  const archived = journalView === 'archived';
-  $('#journal-active').setAttribute('aria-pressed', !archived);
-  $('#journal-archive').setAttribute('aria-pressed', archived);
-  const visible = decisions.filter(decision => Boolean(decision.archived) === archived);
-  if (!visible.length) {
-    list.innerHTML = `<p class="journal-empty">${archived ? 'Архив пуст' : 'Решений пока нет'}</p>`;
-    return;
-  }
-  list.replaceChildren(...visible.map(decision => {
+  const active = [];
+
+  decisions.forEach((decision, index) => {
     const card = document.createElement('article');
     card.className = 'entry';
-    const id = html(decision.id);
-    card.innerHTML = `<div class="entry-top">
-      <h3>${decision.ids.length ? 'Выбрали в работу' : 'Перенос гипотез'}</h3>
-      <p><time></time><span>${sumDays(decision.ids)} из ${available(decision.capacity)} дн.</span></p>
-      </div>
+    card.innerHTML = `<div class="entry-top"><div>
+      <h3>${decision.ids.length ? 'Выбрали в работу' : 'Перенос гипотез'}</h3><p><time></time> · ${sumDays(decision.ids)} из ${available(decision.capacity)} дн.</p>
+      </div></div>
       <p class="entry-capacity"></p>
       ${decision.ids.length ? `<ul>${decision.ids.map(id => {
         const item = byId.get(id);
-        return `<li>${html(item.name)} · ${formatDays(item.days)}${item.parent ? `<br><small>Проверка: ${item.parent.name}. Что измерим: ${item.signal}</small>` : ''}</li>`;
+        return `<li>${html(item.name)} · ${formatDays(item.days)}${item.parent ? `<br><small>Проверка: ${html(item.parent.name)}. Что измерим: ${html(item.signal)}</small>` : ''}</li>`;
       }).join('')}</ul>` : ''}
       <p class="entry-alternatives" hidden></p>
       <p class="entry-reason"></p>
       <div class="entry-actions">
-        <button class="button button-outline" type="button" data-journal-action="copy" data-decision="${id}">${icon('copy')}Копировать</button>
-        <button class="button button-outline" type="button" data-journal-action="edit" data-decision="${id}">Редактировать</button>
-        <button class="button button-outline" type="button" data-journal-action="archive" data-decision="${id}">${archived ? 'Восстановить' : 'В архив'}</button>
-        <button class="button button-danger" type="button" data-journal-action="delete" data-decision="${id}">Удалить</button>
+        <button class="button" type="button" data-copy="${index}">${icon('copy')}Копировать</button>
+        <button class="button" type="button" data-edit-entry="${index}">Изменить</button>
+        <button class="button delete-entry" type="button" data-delete-entry="${index}">Удалить</button>
       </div>`;
     const time = card.querySelector('time');
     time.dateTime = decision.createdAt;
@@ -426,8 +472,11 @@ function renderJournal() {
     alternatives.hidden = !considered;
     alternatives.textContent = considered;
     card.querySelector('.entry-reason').textContent = decision.reason;
-    return card;
-  }));
+    active.push(card);
+  });
+  $('#journal-count').textContent = active.length;
+  list.replaceChildren(...active);
+
 }
 
 function capacitySummary(resource) {
@@ -471,17 +520,18 @@ for (const key of ['total', 'reserved']) {
   input.addEventListener('input', () => changeCapacity(key, input.valueAsNumber));
   input.addEventListener('blur', () => { input.value = capacity[key]; });
 }
-$('#capacity-note').value = capacity.note;
-$('#capacity-note').addEventListener('input', event => {
-  capacity = { ...capacity, note: event.target.value.trim() };
-  persistDraft();
-});
+
 
 sort.addEventListener('click', event => {
   const selectedButton = event.target.closest('[data-sort]');
-  if (!selectedButton || selectedButton.dataset.sort === sortBy) return;
+  if (!selectedButton) return;
+  catalogReverse = selectedButton.dataset.sort === sortBy && !catalogReverse;
   sortBy = selectedButton.dataset.sort;
-  sort.querySelectorAll('button').forEach(button => button.setAttribute('aria-pressed', button === selectedButton));
+  for (const button of sort.querySelectorAll('button')) {
+    const active = button === selectedButton;
+    button.setAttribute('aria-pressed', active);
+    button.innerHTML = (active ? directionIcon(button.dataset.sort, catalogReverse) : '') + criteria[button.dataset.sort].label;
+  }
   renderRows();
 });
 
@@ -500,8 +550,8 @@ function patchPriority(id) {
   const level = scores[id] ?? '';
   if (button) {
     button.dataset.level = level;
-    button.querySelector('span').textContent = priorities[level] ?? 'Важность';
-    button.setAttribute('aria-label', `Важность: ${priorities[level] ?? 'не задана'}. ${byId.get(id).name}`);
+    button.dataset.tip = `Важность: ${priorities[level] ?? 'не задана'}`;
+    button.setAttribute('aria-label', `${button.dataset.tip}. ${byId.get(id).name}`);
   }
   if (!compared.includes(id)) return;
   const cell = $(`[data-comparison-level="${id}"]`);
@@ -535,6 +585,8 @@ document.addEventListener('keydown', event => {
 });
 
 rows.addEventListener('click', event => {
+  const archive = event.target.closest('[data-archive]');
+  if (archive) { setArchived(archive.dataset.archive, true); return; }
   const flag = event.target.closest('[data-priority]');
   if (flag) {
     const wasOpen = flag === priorityTrigger;
@@ -580,27 +632,59 @@ selection.addEventListener('click', event => {
   (selection.querySelector('button') ?? $('#plan-title')).focus({ preventScroll: true });
 });
 
+const comparisonDrop = $('#comparison-drop');
+const destinations = new Map([
+  [rows, 'catalog'], [planDrop, 'plan'], [comparisonDrop, 'compare'],
+  ...['catalog', 'plan', 'compare'].map(pane => [$(`.mobile-nav [data-pane="${pane}"]`), pane]),
+]);
+
 function clearDrag() {
   drag?.node.classList.remove('drag-source');
-  for (const zone of [backlog, planDrop]) zone.classList.remove('drop-ready', 'drop-over');
+  for (const zone of destinations.keys()) zone.classList.remove('drop-ready', 'drop-over');
   $('#drop-preview').hidden = true;
+  const hadPreview = drag?.allowed.has('compare');
   drag = undefined;
+  if (hadPreview) renderComparison();
+}
+
+function beginDrag(node) {
+  const source = planDrop.contains(node) ? 'plan' : $('#comparison-results').contains(node) ? 'compare' : 'catalog';
+  const id = node.dataset.id;
+  const allowed = new Set();
+  if (!selected.includes(id)) allowed.add('plan');
+  if (source !== 'catalog') allowed.add('catalog');
+  if (!byId.get(id).parent && !compared.includes(id) && compared.length < 3) allowed.add('compare');
+  drag = { id, node, source, allowed };
+  node.classList.add('drag-source');
+  if (allowed.has('compare')) renderComparison();
+  for (const [zone, pane] of destinations) {
+    if (allowed.has(pane)) zone.classList.add('drop-ready');
+  }
+}
+
+function applyDrop(pane) {
+  const { id, source } = drag;
+  clearDrag();
+  if (pane === 'plan') return addItem(id);
+  if (pane === 'catalog' && source === 'plan') return removeItem(id);
+  compared = pane === 'compare' ? [...compared, id] : compared.filter(current => current !== id);
+  rows.querySelector(`[data-compare="${id}"]`)?.setAttribute('aria-pressed', compared.includes(id));
+  persistDraft();
+  renderComparison();
 }
 
 document.addEventListener('dragstart', event => {
   const node = event.target.closest('[data-drag="true"]');
   if (!node || !event.dataTransfer || !byId.has(node.dataset.id)) return;
-  const fromPlan = planDrop.contains(node);
-  drag = { id: node.dataset.id, node, target: fromPlan ? backlog : planDrop };
+  beginDrag(node);
   event.dataTransfer.effectAllowed = 'move';
   event.dataTransfer.setData('text/plain', drag.id);
-  node.classList.add('drag-source');
-  drag.target.classList.add('drop-ready');
 });
 document.addEventListener('dragend', clearDrag);
-for (const zone of [backlog, planDrop]) {
+for (const [zone, pane] of destinations) {
   zone.addEventListener('dragover', event => {
-    if (drag?.target !== zone) return;
+    event.stopPropagation?.();
+    if (!drag?.allowed.has(pane)) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
     zone.classList.add('drop-over');
@@ -620,12 +704,10 @@ for (const zone of [backlog, planDrop]) {
     $('#drop-preview').hidden = true;
   });
   zone.addEventListener('drop', event => {
-    if (drag?.target !== zone) return;
+    event.stopPropagation?.();
+    if (!drag?.allowed.has(pane)) return;
     event.preventDefault();
-    const { id } = drag;
-    clearDrag();
-    if (zone === planDrop) addItem(id);
-    else removeItem(id);
+    applyDrop(pane);
   });
 }
 
@@ -637,6 +719,18 @@ function showIdeaForm(visible) {
 }
 $('#open-idea').addEventListener('click', () => showIdeaForm(ideaForm.hidden));
 $('#cancel-idea').addEventListener('click', () => showIdeaForm(false));
+function updateTrialFields() {
+  const days = $('#idea-days').valueAsNumber;
+  const eligible = days >= 3;
+  $('#trial-fields').hidden = $('#trial-fields').disabled = !eligible;
+  const enabled = eligible && $('#trial-enabled').checked;
+  $('#trial-inputs').hidden = !enabled;
+  for (const input of $('#trial-inputs').querySelectorAll('input,textarea')) input.disabled = !enabled;
+  $('#trial-name').required = $('#trial-days').required = enabled;
+  $('#trial-days').max = days - 1;
+}
+$('#idea-days').addEventListener('input', updateTrialFields);
+$('#trial-enabled').addEventListener('change', updateTrialFields);
 ideaForm.addEventListener('submit', event => {
   event.preventDefault();
   const rawRequests = $('#idea-requests').value.trim();
@@ -653,6 +747,16 @@ ideaForm.addEventListener('submit', event => {
     error.hidden = false;
     return;
   }
+  if (item.days >= 3 && $('#trial-enabled').checked) {
+    const name = $('#trial-name').value.trim();
+    const days = $('#trial-days').valueAsNumber;
+    if (!name || !isDayCount(days) || days < 1 || days >= item.days) {
+      error.textContent = 'Укажите название и срок проверки короче разработки.';
+      error.hidden = false;
+      return;
+    }
+    item.trial = { id: item.id + '-trial', name, days, scope: $('#trial-scope').value.trim(), signal: $('#trial-signal').value.trim() };
+  }
   const next = [...customIdeas(), item];
   try { save(CATALOG_KEY, next); }
   catch {
@@ -662,6 +766,7 @@ ideaForm.addEventListener('submit', event => {
   }
   mergeCustomIdeas(next);
   ideaForm.reset();
+  updateTrialFields();
   error.hidden = true;
   showIdeaForm(false);
   renderRows();
@@ -669,15 +774,10 @@ ideaForm.addEventListener('submit', event => {
 });
 
 $('#clear-compare').addEventListener('click', () => {
-  const firstToggle = rows.querySelector(`[data-compare="${compared[0]}"]`);
   for (const id of compared) rows.querySelector(`[data-compare="${id}"]`)?.setAttribute('aria-pressed', 'false');
   compared = [];
   persistDraft();
   renderComparison();
-  firstToggle?.focus();
-});
-$('#compare-jump').addEventListener('click', event => {
-  event.preventDefault();
   $('#compare-title').focus();
 });
 $('#comparison-results').addEventListener('click', event => {
@@ -700,22 +800,24 @@ $('#decision-form').addEventListener('submit', event => {
   const explanation = reason.value.trim();
   const limit = available(capacity);
   if (sumDays(selected) > limit || (!selected.length && limit > 0)) return;
-  if (!explanation) {
-    reason.setCustomValidity('Добавьте обоснование решения.');
-    reason.reportValidity();
-    return;
-  }
+
   const alternatives = compared.filter(id => !selected.some(chosen => family(byId.get(chosen)) === id))
     .map(id => ({ name: byId.get(id).name, score: scores[id] ?? null }));
-  const decision = {
-    id: crypto.randomUUID?.() ?? `decision-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    ids: [...selected], capacity: { ...capacity }, reason: explanation, alternatives, createdAt: new Date().toISOString(),
-  };
+  const decision = { ids: [...selected], capacity: { ...capacity }, reason: explanation, alternatives, compared: [...compared], createdAt: new Date().toISOString() };
+  if (editing) {
+    if (updateJournalEntry(editing, () => ({ ...decision, createdAt: editing.createdAt }))) {
+      finishEdit();
+      openJournal();
+      showNotice('Изменения сохранены');
+    }
+    return;
+  }
   try {
     const previous = loadDecisions();
-    if (previous.length && !previous[0].archived && previous[0].reason === explanation
+    if (previous.length && previous[0].reason === explanation
         && JSON.stringify(previous[0].ids) === JSON.stringify(selected)
         && JSON.stringify(previous[0].capacity) === JSON.stringify(capacity)
+        && JSON.stringify(previous[0].compared ?? []) === JSON.stringify(compared)
         && JSON.stringify(previous[0].alternatives ?? []) === JSON.stringify(alternatives)) {
       decisions = previous;
       openJournal();
@@ -734,114 +836,62 @@ $('#decision-form').addEventListener('submit', event => {
   showNotice('Решение сохранено');
 });
 
-const decisionEditor = $('#decision-editor');
-let editingDecision;
-
-function writeJournal(next) {
-  try { save(DECISIONS_KEY, next); }
-  catch { return false; }
-  decisions = next;
+function updateJournalEntry(original, transform) {
+  const latest = loadDecisions();
+  const saved = JSON.stringify(original);
+  const position = latest.findIndex(item => JSON.stringify(item) === saved);
+  if (position < 0) {
+    showNotice('Решение уже изменилось. Откройте его заново.');
+    return;
+  }
+  const updated = transform(latest[position]);
+  latest.splice(position, 1, ...(updated ? [updated] : []));
+  try { save(DECISIONS_KEY, latest); }
+  catch { showNotice('Браузер не смог сохранить изменения.'); return; }
+  decisions = latest;
   renderJournal();
+  $('#journal-title').focus({ preventScroll: true });
   return true;
 }
 
-function editDecision(decision) {
-  editingDecision = decision;
-  const options = [...hypotheses, ...trials];
-  $('#edit-hypotheses').innerHTML = options.map(item => {
-    const label = item.parent ? `${item.name} (проверка: ${item.parent.name})` : item.name;
-    return `<label class="editor-option">
-      <input type="checkbox" value="${item.id}"${decision.ids.includes(item.id) ? ' checked' : ''}>
-      <span>${html(label)}</span><span class="duration">${formatDays(item.days)}</span>
-    </label>`;
-  }).join('');
-  $('#edit-total').value = decision.capacity.total;
-  $('#edit-reserved').value = decision.capacity.reserved;
-  $('#edit-note').value = decision.capacity.note;
-  $('#edit-reason').value = decision.reason;
-  $('#edit-error').hidden = true;
-  decisionEditor.showModal();
+function restorePlan(snapshot) {
+  capacity = { ...snapshot.capacity };
+  selected = [...snapshot.ids];
+  compared = [...snapshot.compared];
+  reason.value = snapshot.reason;
+  renderBoard();
+  renderRows();
+  renderComparison();
 }
+function finishEdit() {
+  editing = null;
+  $('#cancel-edit').hidden = true;
+  restorePlan(previousDraft);
+}
+$('#cancel-edit').addEventListener('click', () => { finishEdit(); openJournal(); });
 
-$('#cancel-edit').addEventListener('click', () => decisionEditor.close());
-decisionEditor.addEventListener('close', () => {
-  editingDecision = undefined;
-});
-
-$('#decision-edit-form').addEventListener('submit', event => {
-  event.preventDefault();
-  if (!editingDecision) return;
-  const checked = [...$('#edit-hypotheses').querySelectorAll('input:checked')].map(input => input.value);
-  const ids = [...editingDecision.ids.filter(id => checked.includes(id)), ...checked.filter(id => !editingDecision.ids.includes(id))];
-  const resource = {
-    total: $('#edit-total').valueAsNumber,
-    reserved: $('#edit-reserved').valueAsNumber,
-    note: $('#edit-note').value.trim(),
-  };
-  const explanation = $('#edit-reason').value.trim();
-  const latest = loadDecisions();
-  const current = latest.find(decision => decision.id === editingDecision.id);
-  const error = $('#edit-error');
-  let issue = '';
-  if (!current) issue = 'Решение уже удалено.';
-  else if (JSON.stringify(current) !== JSON.stringify(editingDecision)) issue = 'Решение изменилось в другой вкладке. Откройте его заново.';
-  else if (!explanation) issue = 'Добавьте обоснование.';
-  else if (!validCapacity(resource)) issue = 'Укажите целое число от 0 до 99 для каждого поля ресурса.';
-  else if (!validSelection(ids)) issue = 'Для каждой гипотезы выберите один вариант: полный или короткую проверку.';
-  else if (sumDays(ids) > available(resource)) issue = `Перерасход — ${formatDays(sumDays(ids) - available(resource))}.`;
-  else if (!ids.length && available(resource) > 0) issue = 'Добавьте гипотезу в решение.';
-  if (!issue) {
-    const chosen = new Set(ids.map(id => byId.get(family(byId.get(id))).name));
-    const alternatives = Array.isArray(current.alternatives)
-      ? current.alternatives.filter(item => !chosen.has(item?.name)) : [];
-    const updated = { ...current, ids, reason: explanation, capacity: resource, alternatives };
-    if (writeJournal(latest.map(decision => decision.id === current.id ? updated : decision))) {
-      decisionEditor.close();
-      $('#journal-title').focus({ preventScroll: true });
-      showNotice('Изменения сохранены');
-      return;
+journal.addEventListener('click', async event => {
+  const edit = event.target.closest('[data-edit-entry]');
+  if (edit) {
+    if (!editing) previousDraft = { capacity, ids: selected, compared: [...compared], reason: reason.value };
+    editing = decisions[Number(edit.dataset.editEntry)];
+    const legacyCompared = (editing.alternatives ?? []).map(alt => hypotheses.find(h => h.name === alt.name)?.id).filter(Boolean);
+    restorePlan({ ...editing, compared: validSelection(editing.compared) ? editing.compared : legacyCompared });
+    $('#cancel-edit').hidden = false;
+    showPane('plan');
+    $('#plan-title').focus();
+    return;
+  }
+  const remove = event.target.closest('[data-delete-entry]');
+  if (remove) {
+    if (window.confirm('Удалить решение без возможности восстановления?')) {
+      updateJournalEntry(decisions[Number(remove.dataset.deleteEntry)], () => null);
     }
-    issue = 'Браузер не смог сохранить изменения.';
+    return;
   }
-  error.textContent = issue;
-  error.hidden = false;
-});
-
-$('#journal-filter').addEventListener('click', event => {
-  const button = event.target.closest('[data-journal-filter]');
+  const button = event.target.closest('[data-copy]');
   if (!button) return;
-  journalView = button.dataset.journalFilter;
-  renderJournal();
-});
-
-$('#journal-list').addEventListener('click', async event => {
-  const button = event.target.closest('[data-journal-action]');
-  if (!button) return;
-  const { decision: id, journalAction: action } = button.dataset;
-  const latest = loadDecisions();
-  const decision = latest.find(item => item.id === id);
-  if (!decision) {
-    decisions = latest;
-    renderJournal();
-    showNotice('Решение уже удалено');
-    return;
-  }
-  if (action === 'edit') {
-    editDecision(decision);
-    return;
-  }
-  if (action === 'archive' || action === 'delete') {
-    if (action === 'delete' && !window.confirm('Удалить решение без возможности восстановления?')) return;
-    const next = action === 'delete' ? latest.filter(item => item.id !== id)
-      : latest.map(item => item.id === id ? { ...item, archived: !item.archived } : item);
-    if (!writeJournal(next)) {
-      showNotice('Браузер не смог обновить журнал');
-      return;
-    }
-    $(journalView === 'archived' ? '#journal-archive' : '#journal-active').focus({ preventScroll: true });
-    showNotice(action === 'delete' ? 'Решение удалено' : decision.archived ? 'Решение восстановлено' : 'Решение в архиве');
-    return;
-  }
+  const decision = decisions[Number(button.dataset.copy)];
   const summary = [
     `${decision.ids.length ? 'Выбрали в работу' : 'Перенос гипотез'} · ${sumDays(decision.ids)} из ${available(decision.capacity)} дн.`,
     capacitySummary(decision.capacity),
@@ -865,12 +915,32 @@ window.addEventListener('storage', event => {
     decisions = loadDecisions();
     renderJournal();
   }
-  if (event.key === CATALOG_KEY || event.key === SCORES_KEY || event.key === null) {
+  if (event.key === CATALOG_KEY || event.key === SCORES_KEY || event.key === ARCHIVE_KEY || event.key === DELETED_KEY || event.key === null) {
     renderRows();
     renderComparison();
   }
 });
 
+const tooltip = $('#icon-tooltip');
+let tipOwner;
+function showTip(event) {
+  const owner = event.target.closest?.('[data-tip], button[data-step]');
+  if (!owner || (event.type === 'pointerover' && event.pointerType === 'touch')) return;
+  tipOwner = owner;
+  tooltip.textContent = owner.dataset.tip || owner.getAttribute('aria-label');
+  tooltip.hidden = false;
+  const box = owner.getBoundingClientRect();
+  const gap = parseFloat(getComputedStyle(tooltip).getPropertyValue('--space-2'));
+  const left = box.left + (box.width - tooltip.offsetWidth) / 2;
+  tooltip.style.left = Math.max(gap, Math.min(left, window.innerWidth - tooltip.offsetWidth - gap)) + 'px';
+  tooltip.style.top = (box.top > tooltip.offsetHeight + gap ? box.top - tooltip.offsetHeight - gap : box.bottom + gap) + 'px';
+}
+function hideTip() { tooltip.hidden = true; tipOwner = null; }
+for (const type of ['pointerover', 'focusin']) document.addEventListener(type, showTip);
+for (const type of ['pointerout', 'focusout']) document.addEventListener(type, event => {
+  if (tipOwner && !tipOwner.contains(event.relatedTarget)) hideTip();
+});
+for (const type of ['pointerdown', 'scroll']) document.addEventListener(type, hideTip, true);
 setTheme();
 renderBoard();
 renderRows();
