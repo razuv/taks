@@ -61,6 +61,7 @@
   --icon-size: 18px;
   --icon-small: 15px;
   --motion-fast: 110ms;
+  --tooltip-delay: 220ms;
   --motion-enter: 170ms;
   --motion-progress: 220ms;
   --ease: cubic-bezier(.2, .75, .2, 1);
@@ -380,7 +381,7 @@ textarea::placeholder, input::placeholder { color: var(--muted); }
 .segmented .icon { width: var(--icon-small); height: var(--icon-small); }
 .segmented { max-width: 100%; }
 .segmented button { min-width: 0; }
-#icon-tooltip { position: fixed; z-index: 10; pointer-events: none; max-width: calc(100vw - 2 * var(--space-2)); padding: var(--space-1) var(--space-2); border-radius: var(--radius-small); color: var(--control-on); background: var(--control-solid); box-shadow: var(--shadow); font-size: var(--type-label); }
+#icon-tooltip { position: fixed; z-index: 10; pointer-events: none; max-width: calc(100vw - 2 * var(--space-2)); padding: var(--space-1) var(--space-2); border-radius: var(--radius-small); color: var(--muted); background: var(--raised); border: 1px solid var(--rule); box-shadow: var(--shadow); font-size: var(--type-label); }
 @media (prefers-reduced-motion: no-preference) {
-  #icon-tooltip:not([hidden]) { animation: appear var(--motion-fast) var(--ease) var(--motion-fast) both; }
+  #icon-tooltip:not([hidden]) { animation: appear var(--motion-fast) var(--ease) var(--tooltip-delay) both; }
 }
